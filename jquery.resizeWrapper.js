@@ -1,135 +1,161 @@
 // Copyright (c) ystskm
 // https://github.com/ystskm/jquery-resizeWrapper/LICENSE
-(function($){
-  $.resizeWrapper = function(options) {
-    options = $.extend({
+(function($) {
+  var Default = {
+    Selector: '.wrapper',
+    Options: {
       expect: 1280,
-      duration: 500,
-      target: '.wrapper',
+      delay: 300
+    },
+    EachOptions: {
       css: [],
       animate: ['width', 'margin-left', 'margin-right'],
-      relation: null
-    }, options);
-    var arr = [].concat(options['target']);
-    var css = [].concat(options['css']);
-    var anm = [].concat(options['animate']);
-    var relation = options['relation'] || {};
-    for( var i in relation) {
-      relation[i].css = [].concat(relation[i].css || []);
-      relation[i].anm = [].concat(relation[i].animate || []);
+      duration: 300
     }
-  
-    var win_width = $(window).width(), onaction = false;
-  
+  };
+  $.resizeWrapper = function(setting, options, callback) {
+    if($.isFunction(options))
+      callback = options, options = {};
+
+    var win_width = $(window).width(), win_height = $(window).height();
+
+    var onaction = false;
+
+    if(!hasKey(setting))
+      setting = {}, setting[Default.Selector] = {};
+    options = $.extend({}, Default.Options, options);
+
     $(window).resize(start);
-  
-    if(win_width != options['expect']) {
-      win_width = options['expect'];
-      resize();
-    }
-  
+
+    if(win_width != options.expect)
+      win_width = options.expect, start();
+
     function start(e) {
-      if(onaction === false) {
-        onaction = true;
-        timer = setTimeout(resize, options.duration);
+      var diff_w = 0, diff_h = 0;
+      if(!onaction
+        && (diff_w = $(window).width() - win_width
+          || (diff_h = $(window).height() - win_height)))
+        onaction = true, timer = setTimeout(function() {
+          resize(diff_w ? diff_w > 0: diff_h > 0);
+        }, options.delay);
+    }
+    function resize(direction) {
+      resizeFunction(setting, direction);
+    }
+    function resizeFunction(setting, direction, parent, dfd) {
+      var i = null, fn = null, selectors = Object.keys(setting);
+
+      parent = parent || $(window);
+      dfd = dfd || $.Deferred();
+
+      set(), resizeOne();
+
+      function set() {
+        if(direction)
+          i = -1, fn = plus;
+        else
+          i = selectors.length, fn = minus;
       }
-    }
-    function resize() {
-      for( var i = 0; i < arr.length; i++)
-        $(arr[i]).each(eachcb);
-      onaction = false;
-    }
-    function eachcb(i, dom) {
-      var win_resized = $(window).width();
-      $(dom).css(calc(dom, css, win_resized));
-      rel_resize(dom);
-      $(dom).animate(calc(dom, anm, win_resized), function() {
-        rel_resize(dom);
-      });
-      win_width = win_resized;
-    }
-    function rel_resize(dom) {
-      var win_resized = $(window).width();
-      for( var i in relation) {
-        var name = null, fn = null, tgts;
-        tgts = relation[i].css;
-        if(tgts.length)
-          for( var j = 0; j < tgts.length; j++) {
-            if(typeof tgts[j] == 'object') {
-              name = Object.keys(tgts[j])[0];
-              fn = tgts[j][name];
-            } else {
-              name = tgts[j];
-              fn = null;
-            }
-            if($.isFunction(fn))
-              $(i).css(name, fn($(dom).css(name), win_resized, win_width));
-            else
-              $(i).css(name, $(dom).css(name));
+      function resizeOne() {
+        if(fn())
+          $.when(eachResize()).then(resizeOne);
+        else
+          $.isFunction(callback) ? callback(): $.noop(), onaction = false;
+      }
+      function plus() {
+        return i++ < selectors.length;
+      }
+      function minus() {
+        return i--;
+      }
+      function eachResize() {
+        return $(selectors[i]).each(function(idx, dom) {
+          eachcb(selectors[i], dom);
+        }), dfd.promise();
+      }
+      function initEachSetting(one) {
+        one.css = [].concat(one.css || []);
+        one.anm = [].concat(one.animate || []);
+        one.rel = one.relation || {};
+        for( var i in one.rel) {
+          one.rel[i].css = [].concat(one.rel[i].css || []);
+          one.rel[i].anm = [].concat(one.rel[i].animate || []);
+        }
+        return $.extend({}, Default.EachOptions, one);
+      }
+      function eachcb(i, dom) {
+
+        var one = initEachSetting(setting[i]);
+        var winw_resized = $(window).width(), winh_resized = $(window).height();
+
+        var promises = [];
+        for( var j = 0; j < one.css.length; j++)
+          promises.push($(dom).css(calc(dom, one.css[j], winw_resized)));
+        for( var j = 0; j < one.anm.length; j++)
+          promises.push(animatePromise(calc(dom, one.anm[j], winw_resized)));
+
+        $.when.apply($, promises).then(function() {
+          if(hasKey(one.relation))
+            return resizeFunction(one.relation, direction, dom, dfd);
+          // the last of one resize
+          if($.isFunction(one.callback))
+            one.callback();
+          win_width = winw_resized, win_height = winh_resized;
+          dfd.resolve();
+        });
+
+        function animatePromise(stat) {
+          var anm_dfd = $.Deferred();
+          $(dom).animate(stat, one.duration, function() {
+            anm_dfd.resolve();
+          });
+          return anm_dfd.promise();
+        }
+      }
+      function calc(dom, tgts, winw_resized) {
+        var resized = {};
+        for( var name in tgts) {
+          var tgt = tgts[name];
+          if(typeof tgt == 'string')
+            tgt = {}, tgt[name] = true;
+          resized[name] = setResized(name, tgt, stat(dom, name), stat(parent,
+            name));
+        }
+        // debug
+        /*
+        console.log('TAG:' + dom.tagName + ',ID:' + dom.id + ',CLASS:' + dom.className);
+        console.log(resized);
+        */
+        return resized;
+        function setResized(name, fn, dom_stat, parent_stat) {
+          if($.isFunction(fn))
+            return fn(dom_stat, winw_resized, win_width, parent_stat);
+          if(fn === true)
+            return parent_stat;
+          else
+            return fn;
+        }
+        function stat(dom, dirc) {
+          var css = null, $dom = $(dom);
+          try {
+            css = $dom.css(dirc);
+            if(css == 'auto' && $dom.position()[dirc] != null)
+              css = $dom.position()[dirc] + 'px', $dom.css(dirc, css);
+          } catch(e) {
+            if($(window).is(dom))
+              css = 0;
+          };
+          if(css == null) {
+            if($.isFunction($dom[dirc]))
+              return $dom[dirc]() + 'px';
+            return '0px';
           }
-        tgts = relation[i].anm;
-        if(tgts.length){
-          var resized = {};
-          for( var j = 0; j < tgts.length; j++) {
-            if(typeof tgts[j] == 'object') {
-              name = Object.keys(tgts[j])[0];
-              fn = tgts[j][name];
-            } else {
-              name = tgts[j];
-              fn = null;
-            }
-            if($.isFunction(fn))
-              resized[name] = fn($(dom).css(name), win_resized, win_width);
-            else
-              resized[name] = $(dom).css(name);
-          }
-          $(i).animate(resized);
+          return css;
         }
       }
     }
-    function calc(dom, tgts, win_resized) {
-      var resized = {};
-      for( var j = 0; j < tgts.length; j++) {
-        var name = null, fn = null;
-        if(typeof tgts[j] == 'object') {
-          name = Object.keys(tgts[j])[0];
-          fn = tgts[j][name];
-        } else
-          name = tgts[j];
-  
-        var dom_width, unit, dom_stat = stat($(dom), name);
-        
-        // TODO more correct
-        // var dom_restw = $.data(dom, 'rest_width') || 0;
-  
-        if(/^(\d+)(\D+)$/.test(dom_stat)) {
-          if(typeof fn == 'function')
-            resized[name] = fn.call(dom, dom_stat, win_resized, win_width);
-          else {
-            switch(RegExp.$2) {
-            case '%':
-              dom_width = parseInt(win_width * RegExp.$1 / 100);
-              unit = 'px';
-              $(dom).css(name, dom_width + unit);
-              break;
-            default:
-              dom_width = RegExp.$1;
-              unit = RegExp.$2;
-            }
-            resized[name] = parseInt(win_resized * dom_width / win_width) + unit;
-          }
-        } else
-          throw new Error('unexpected css value for resizeWrapper.js');
-      }
-      return resized;
-    }
-    function stat(dom, dirc) {
-      var css = null;
-      try {
-        css = dom.css(dirc);
-      } catch(e) {
-      };
-      return (css == null) ? dom[dirc]() + 'px': css;
+    function hasKey(obj) {
+      return typeof obj == 'object' && Object.keys(obj).length;
     }
   };
 })(window.jQuery);
